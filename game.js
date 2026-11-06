@@ -520,12 +520,14 @@ function drawMon(t) {
 }
 
 /* ================= player ================= */
-const P = {x: 0, z: 1.2, yaw: 0, pitch: -.04, vx: 0, vz: 0, bob: 0, eye: 1.65, R: .28};
+const P = {x: 0, z: 1.2, yaw: 0, pitch: -.04, vx: 0, vz: 0, bob: 0, eye: 1.65, eyeB: 1.65, R: .28, crouch: false, hidden: null, spike: 0, bat: 1, stam: 1, held: false};
 const keys = {};
 let locked = false, started = false;
 addEventListener('keydown', e => {
   keys[e.code] = true;
+  if (e.code === 'Tab' || e.code === 'Space') e.preventDefault();
   if (!started) return;
+  if (e.code === 'Tab') { S.showObj = 6; objApply(); }
   if (e.code === 'KeyF') toggleFlash();
   if (e.code === 'KeyE') interactKey();
   if (e.code === 'KeyQ') { quality = quality ? 0 : 1; resize(); applyQuality(); toast('Quality: ' + (quality ? 'High' : 'Low')); }
@@ -543,7 +545,7 @@ addEventListener('pointermove', e => { if (drag && !locked) { P.yaw -= (e.client
 const flash = new THREE.SpotLight(0xfff1d8, 80, 26, .42, .5, 1.3);
 flash.castShadow = true; flash.shadow.mapSize.set(1024, 1024); flash.shadow.bias = -.0005; flash.shadow.camera.near = .1;
 scene.add(flash, flash.target); let flashOn = false;
-function toggleFlash() { flashOn = !flashOn; flash.visible = flashOn; toast(flashOn ? 'Flashlight on' : 'Flashlight off'); beep(flashOn ? 1800 : 1200, .03, .06); }
+function toggleFlash() { if (!flashOn && P.bat <= .001) { toast('The flashlight is dead'); return; } flashOn = !flashOn; flash.visible = flashOn; toast(flashOn ? 'Flashlight on' : 'Flashlight off'); beep(flashOn ? 1800 : 1200, .03, .06); }
 flash.visible = false;
 function applyQuality() { flash.shadow.mapSize.set(quality ? 1024 : 512, quality ? 1024 : 512); flash.shadow.map && flash.shadow.map.dispose(); flash.shadow.map = null; SPOT_DESK.castShadow = !!quality; }
 
@@ -567,7 +569,7 @@ function nearDoor() {
 function interact() {
   const d = nearDoor(); if (!d) return;
   if (d.locked) { d.shake = .4; toast(d.msg); thud(); return; }
-  d.target = d.target ? 0 : 1; creak();
+  d.target = d.target ? 0 : 1; creak(); P.spike = Math.max(P.spike, .9);
 }
 let toastT = 0; function toast(t) { const e = $('prompt'); e.textContent = t; e.style.display = 'block'; toastT = 2.2; }
 
@@ -611,8 +613,8 @@ function frameLoop() {
   requestAnimationFrame(frameLoop);
   const dt = Math.min(.05, clock.getDelta()); if (!window.__ready) return; T += dt;
   // movement
-  if (started && !S.freeze) {
-    const sp = (keys.ShiftLeft || keys.ShiftRight || Math.hypot(TJ.x, TJ.y) > .95) ? 3.3 : 1.9;
+  if (started && !S.freeze && !P.hidden) {
+    P.crouch = !!(keys.KeyC || keys.ControlLeft); const sp = P.crouch ? 1.0 : ((keys.ShiftLeft || keys.ShiftRight || Math.hypot(TJ.x, TJ.y) > .95) ? 3.3 : 1.9);
     let ix = Math.max(-1, Math.min(1, (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0) + TJ.x)), iz = Math.max(-1, Math.min(1, (keys.KeyS ? 1 : 0) - (keys.KeyW ? 1 : 0) + TJ.y));
     if (keys.ArrowLeft) P.yaw += dt * 1.8; if (keys.ArrowRight) P.yaw -= dt * 1.8;
     const l = Math.max(1, Math.hypot(ix, iz)); ix /= l; iz /= l;
@@ -621,8 +623,9 @@ function frameLoop() {
     const [nx, nz] = collide(P.x + P.vx * dt, P.z + P.vz * dt); P.x = nx; P.z = nz;
     const spd = Math.hypot(P.vx, P.vz);
     if (spd > .3) { P.bob += dt * spd * 2.9; stepAcc += dt * spd; if (stepAcc > (sp > 2 ? 1.5 : 1.05)) { stepAcc = 0; step(); } }
-    P.eye = 1.65 + Math.sin(P.bob) * .022 * Math.min(1, spd / 1.9);
   }
+  P.eyeB += ((P.hidden ? .72 : P.crouch ? 1.2 : 1.65) - P.eyeB) * Math.min(1, dt * 7); P.eye = P.eyeB + Math.sin(P.bob) * .022 * Math.min(1, Math.hypot(P.vx, P.vz) / 1.9);
+  if (P.hidden) { let dy = P.yaw - P.hidden.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); dy = Math.max(-1.1, Math.min(1.1, dy)); P.yaw = P.hidden.yaw + dy; P.pitch = Math.max(-.6, Math.min(.35, P.pitch)); }
   camera.position.set(P.x, P.eye, P.z); camera.rotation.set(P.pitch, P.yaw, Math.sin(P.bob * .5) * .0025 * Math.hypot(P.vx, P.vz));
   // flashlight follows view with a slight lag
   const fd = new THREE.Vector3(0, 0, -1).applyEuler(camera.rotation);
@@ -645,12 +648,12 @@ function frameLoop() {
   POOL.forEach((L, i) => {
     const s = act[i]; if (!s) { L.intensity = 0; return; }
     let f = s.f(T); if (s.pend) s.p.set(12.5 + Math.sin(pend) * -.7, 2.9 - Math.cos(pend) * .66 + .0, 5 + Math.sin(pendulum.rotation.x) * .6);
-    L.position.copy(s.p); L.color.copy(s.c); L.distance = s.d; L.intensity = s.i * f * s.w * (s.em ? 1 : S.power);
+    L.position.copy(s.p); L.color.copy(s.c); L.distance = s.d; L.intensity = s.i * f * s.w * (s.em ? 1 : S.power) * .8;
   });
   for (const s of SRC) if (s.mesh) { const f = s.f(T); s.mesh.material.color.copy(s.base).multiplyScalar((.12 + .88 * Math.min(1, f)) * (s.em ? 1 : Math.max(.03, S.power))); }
   // desk lamp subtle hum flicker
   SPOT_DESK.intensity = (S.deskOff ? 0 : 120 * S.power) * (.97 + .03 * Math.sin(T * 90) + (hash(Math.floor(T * 7)) > .985 ? -.3 : 0));
-  AMB.intensity = 1.7 * (.1 + .9 * S.power); HEMI.intensity = .6 * (.1 + .9 * S.power);
+  AMB.intensity = 1.0 * (.08 + .92 * S.power); HEMI.intensity = .34 * (.08 + .92 * S.power);
   if (monCtx && Math.floor(T * 8) !== Math.floor((T - dt) * 8)) drawMon(T);
   // dust
   const pa = dg.attributes.position.array;
@@ -663,10 +666,10 @@ function frameLoop() {
   const rn = roomAt(P.x, P.z);
   if (rn && rn !== curRoom) { curRoom = rn; const e = $('room'); e.textContent = rn; e.style.opacity = 1; setTimeout(() => { if (curRoom === rn) e.style.opacity = 0; }, 2600); }
   if (toastT > 0) { toastT -= dt; if (toastT <= 0) $('prompt').style.display = 'none'; }
-  else { const d = started && !curInt ? nearDoor() : null; const e = $('prompt'); if (curInt) { e.textContent = curInt.hold ? curInt.label : 'E: ' + curInt.label; e.style.display = 'block'; } else if (d) { e.textContent = (d.locked ? 'E: try the door' : d.target ? 'E: close' : 'E: open'); e.style.display = 'block'; } else e.style.display = 'none'; }
+  else { const d = started && !curInt && !P.hidden ? nearDoor() : null; const e = $('prompt'); if (P.hidden) { e.textContent = 'E: come out   |   hold SPACE: hold your breath'; e.style.display = 'block'; } else if (curInt) { e.textContent = curInt.hold ? curInt.label : 'E: ' + curInt.label; e.style.display = 'block'; } else if (d) { e.textContent = (d.locked ? 'E: try the door' : d.target ? 'E: close' : 'E: open'); e.style.display = 'block'; } else e.style.display = 'none'; }
   // sfx
   dripT -= dt; if (dripT < 0 && AC) { drip(); dripT = 4 + Math.random() * 9; }
-  storyTick(dt, T); cullRooms();
+  storyTick(dt, T); entTick(dt, T); cullRooms();
   if (dt > .026) { slowT += dt; fastT = 0; } else if (dt < .0185) { fastT += dt; slowT = Math.max(0, slowT - dt); }
   if (slowT > 1.2 && prScale > .55) { prScale = Math.max(.55, prScale - .12); resize(); slowT = 0; }
   if (fastT > 6 && prScale < 1) { prScale = Math.min(1, prScale + .08); resize(); fastT = 0; }
@@ -707,13 +710,14 @@ function knock(pos, n = 3, gap = 380, vol = 1.6) {
   for (let i = 0; i < n; i++) setTimeout(() => { if (S.abort || !AC) return; const p = mkPan(pos, 1.5, 1); p.connect(master); noiseBurst(.28, 120, vol, .8, p); beep(62, .22, vol * .35); }, i * gap);
 }
 function bones(pos, n = 8) { for (let i = 0; i < n; i++) setTimeout(() => { if (S.abort || !AC) return; const p = mkPan(pos.clone().add(new V3((Math.random() - .5) * 2, 0, (Math.random() - .5) * 2)), 1.5, 1); p.connect(master); noiseBurst(.05, 2400 + Math.random() * 1800, .8, 6, p); }, i * (60 + Math.random() * 130)); }
-function showSub(who, text) { $('sub').innerHTML = '<span><b>' + who + '</b>' + text + '</span>'; }
+function showSub(who, text) { if (!S.subs) { $('sub').innerHTML = ''; return; } $('sub').innerHTML = '<span><b>' + who + '</b>' + text + '</span>'; }
 let subK = '';
 async function say(id, o = {}) {
   const L = LINES[id] || {who: '', text: ''}; subK = id; if (!o.silent) showSub(o.who || L.who.replace(/ \(.*\)/, ''), o.sub || L.text);
   const h = voice(id, o); await h.done; chk(); if (subK === id) $('sub').innerHTML = ''; return h;
 }
-function setObj(t) { const e = $('obj'); e.textContent = t; e.style.opacity = t ? 1 : 0; }
+function objApply() { const e = $('obj'); e.textContent = S.objText || ''; e.style.opacity = (S.showObj > 0 && S.objText) ? 1 : 0; }
+function setObj(t) { S.objText = t; S.showObj = t ? 5 : 0; objApply(); }
 async function titleCard(a, b, ms = 3000) { $('title').innerHTML = '<small>' + a + '</small>' + b; $('title').style.opacity = 1; await sleep(ms); $('title').style.opacity = 0; await sleep(700); }
 function fadeTo(v, s = 2.5) { const f = $('fade'); f.style.transition = 'opacity ' + s + 's'; f.style.opacity = v; return sleep(s * 1000); }
 function note(t, ms = 7000) { const e = $('note'); e.innerHTML = t; e.style.display = 'block'; clearTimeout(note.t); note.t = setTimeout(() => e.style.display = 'none', ms); }
@@ -723,13 +727,13 @@ function flicker(sec) { S.flick = sec; }
 /* ---- interactables ---- */
 const INT = []; let curInt = null, holdT = 0;
 function addInt(o) { const it = Object.assign({r: 1.8, hold: 0, label: 'Use', active: true, used: false}, o); INT.push(it); return it; }
-function useInt(it) { it.active = false; it.used = true; holdT = 0; if (it.onUse) it.onUse(); }
+function useInt(it) { it.active = !!it.repeat; it.used = true; holdT = 0; if (it.onUse) it.onUse(); }
 function findInt() {
   const fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw); let best = null, bd = 1e9;
   for (const it of INT) { if (!it.active) continue; const dx = it.pos.x - P.x, dz = it.pos.z - P.z, d = Math.hypot(dx, dz); if (d > it.r) continue; if (d > 1.0 && (dx * fx + dz * fz) / (d || 1) < .35) continue; if (d < bd) { bd = d; best = it; } }
   return best;
 }
-function interactKey() { if (curInt && !curInt.hold) { useInt(curInt); return; } if (!curInt) interact(); }
+function interactKey() { if (P.hidden) { leaveHide(); return; } if (curInt && !curInt.hold) { useInt(curInt); return; } if (!curInt) interact(); }
 async function waitInt(o) { const it = addInt(o); await until(() => it.used); return it; }
 async function ringAnswer(pos, label, lamp) {
   const ring = voice('phone_ring', {pos, loop: true, gain: 1.0, ref: 2, wet: .25});
@@ -758,12 +762,12 @@ function walkerTick(dt) {
 /* ---- ghost silhouettes ---- */
 const GH = {}; let ghost = null;
 async function ghostLoad() { for (const n of ['Zombie_Basic', 'Characters_Lis']) GH[n] = await loader.loadAsync('models/ghost_' + n + '.glb'); }
-const ghostMat = new THREE.MeshStandardMaterial({color: 0x030303, roughness: 1, metalness: 0});
+const ghostMat = new THREE.MeshBasicMaterial({color: 0x000000});
 function ghostShow(n, x, z, fx, fz) {
   ghostHide(true); const src = GH[n]; if (!src) return; const obj = SU.clone(src.scene);
   obj.traverse(m => { if (m.isMesh) { m.material = ghostMat; m.castShadow = false; m.frustumCulled = false; } });
   const bb = new THREE.Box3().setFromObject(obj), s = 1.75 / Math.max(.1, bb.max.y - bb.min.y), wrap = new THREE.Group(); wrap.add(obj); obj.position.y = -bb.min.y;
-  wrap.scale.setScalar(s); wrap.position.set(x, 0, z); wrap.rotation.y = Math.atan2(fx - x, fz - z);
+  wrap.scale.set(s * .82, s * 1.12, s * .82); wrap.position.set(x, 0, z); wrap.rotation.y = Math.atan2(fx - x, fz - z);
   const mixer = new THREE.AnimationMixer(obj), clip = src.animations.find(a => /^idle$/i.test(a.name)) || src.animations[0]; if (clip) mixer.clipAction(clip).play();
   scene.add(wrap); ghost = {wrap, mixer, seen: 0, age: 0};
 }
@@ -803,6 +807,7 @@ function resetWorld(n) {
   flashOn = false; flash.visible = false; phoneLamp.i = 0; phoneLamp.f = () => 1; ghostHide(true); moveWheel(0);
   for (const t of tapesGroup) t.parent && t.parent.remove(t); tapesGroup = [];
   $('sub').innerHTML = ''; setObj(''); $('note').style.display = 'none'; $('choice').style.display = 'none'; $('ending').style.display = 'none'; if (master) master.gain.value = .9;
+  entReset(); setupHides(); placeBatteries(n);
 }
 function stopAll() {
   for (const h of [...S.voices]) h.stop(); S.voices.clear(); walkerStop(); ghostHide(true);
@@ -853,21 +858,21 @@ async function n1() {
 
 /* ================= NIGHT 2: The Dead Voice ================= */
 async function n2() {
-  moveWheel(1); setObj('Wait by the phone.'); await sleep(5000);
+  moveWheel(1); setPower(.85); setObj('Wait by the phone.'); await sleep(5000);
   setObj('Answer the phone.'); await ringAnswer(PHONE_POS, 'Answer', true); setObj('');
   S.monLine = 1; const st = voice('static', {loop: true, gain: .09});
   await say('2a', {pos: PHONE_POS, gain: 1.8}); await sleep(500); await say('2b', {gain: 1.1}); await sleep(400); await say('2c', {pos: PHONE_POS, gain: 1.8});
   S.flick = 1.6; await say('2d', {pos: CORR_E, gain: 2.0, wet: .5, sub: '[ a voice whispers backwards ]', who: 'Lis'}); await sleep(500);
   await say('2e', {pos: PHONE_POS, gain: 1.8}); await sleep(500); await say('2f', {gain: 1.1}); await sleep(500); await say('2g', {pos: PHONE_POS, gain: 1.8});
   st.stop(); S.monLine = 0; await sleep(1200); await say('2h', {pos: RADIO, gain: 1.6, wet: .3});
-  setObj('Find the call log in the Medical Bay.');
+  setObj('Find the call log in the Medical Bay.'); entLevel(1);
   bg(async () => { await until(() => roomId() === 'cor'); await sleep(1500); ghostShow('Characters_Lis', 24.5, 0, 4, 0); });
   await waitInt({pos: new V3(20.6, .5, -3.4), r: 1.7, label: 'Read the call log'});
   note('<b>CALL LOG</b><br>03:41 &nbsp; Caller: L. &nbsp; Location: this building<br>03:58 &nbsp; Caller: L. &nbsp; Location: this building<br>04:12 &nbsp; Caller: L. &nbsp; Location: <i>behind you</i>');
   S.flick = 2; voice('2d', {pos: new V3(P.x, 1.3, P.z + 1.2), gain: 1.4, wet: .5}); await sleep(2500);
   setObj('Return to the Control Room.'); bg(async () => { await wheelStep(2); });
   await until(() => roomId() === 'ops'); await sleep(2500);
-  setObj('The phone is ringing again.'); await ringAnswer(PHONE_POS, 'Answer', true); setObj('');
+  entLevel(0); setObj('The phone is ringing again.'); await ringAnswer(PHONE_POS, 'Answer', true); setObj('');
   const st2 = voice('static', {loop: true, gain: .12}); S.flick = 3; S.monLine = 3; await sleep(3500); st2.stop(); await sleep(1200);
 }
 
@@ -875,14 +880,14 @@ async function n2() {
 async function n3() {
   moveWheel(2); setObj('Listen to the radio.'); await sleep(2000); await say('3a', {pos: RADIO, gain: 1.6, wet: .3});
   const spots = [{k: 'sto', p: new V3(16.0, .63, 2.6), n: 'Storage'}, {k: 'med', p: new V3(20.6, .48, -3.45), n: 'Medical Bay'}, {k: 'dorm', p: new V3(21.8, .5, 7.4), n: 'Dormitory'}];
-  let got = 0; setObj('Find the 3 tapes: Storage, Medical Bay, Dormitory. (0/3)');
+  let got = 0; setPower(.72); entLevel(2); setObj('Find the 3 tapes: Storage, Medical Bay, Dormitory. (0/3)');
   const tapes = spots.map(s => { const t = makeTape(s.p.x, s.p.y, s.p.z, s.k); tapesGroup.push(t); return t; });
   const its = spots.map((s, i) => addInt({pos: s.p, r: 1.7, label: 'Take the tape', onUse: () => { tapes[i].visible = false; got++; setObj(got < 3 ? 'Find the 3 tapes: Storage, Medical Bay, Dormitory. (' + got + '/3)' : 'Return to the Control Room and play the tapes.'); noiseBurst(.1, 3000, .6, 3); } }));
   bg(async () => { await until(() => got >= 1); await until(() => roomId() === 'cor'); await sleep(1200); ghostShow('Zombie_Basic', 23, 0, 4, 0); });
   bg(async () => { await until(() => got >= 2); await sleep(2500); knock(new V3(P.x - 3, 1.2, P.z), 3, 450, 1.2); await wheelStep(3); });
   bg(async () => { await until(() => got >= 3); S.flick = 2.2; await sleep(500); walkerStart(new V3(P.x, .2, P.z + 6)); walkerOrbit(3.2); S.walker.gainT = 1.8; await sleep(7000); walkerStop(); });
   await until(() => got >= 3); await until(() => roomId() === 'ops');
-  setObj('Play the tapes on the cassette player (desk).'); await waitInt({pos: CASSETTE, r: 2.0, label: 'Play the tapes'}); setObj('');
+  entLevel(0); setObj('Play the tapes on the cassette player (desk).'); await waitInt({pos: CASSETTE, r: 2.0, label: 'Play the tapes'}); setObj('');
   await sleep(600); await say('3b', {pos: CASSETTE, gain: 1.9}); await sleep(700); await say('3c', {pos: CASSETTE, gain: 1.9}); await sleep(500);
   S.flick = 1.2; await say('3d', {pos: CASSETTE, gain: 1.9}); await sleep(700); await say('3e', {gain: 1.1}); await sleep(900);
   S.deskOff = true; await say('3f', {pos: CASSETTE, gain: 2.2, wet: .3}); await sleep(2500);
@@ -891,7 +896,7 @@ async function n3() {
 /* ================= NIGHT 4: Below ================= */
 async function n4() {
   moveWheel(3); setPower(0); phoneLamp.i = 3; phoneLamp.f = t => .6 + .4 * Math.sin(t * 2); S.deskOff = true; S.monLine = 0;
-  await sleep(2500); await say('4a', {pos: RADIO, gain: 1.7, wet: .4}); setObj('Restart the generator (Generator Room). Press F for your flashlight.');
+  await sleep(2500); await say('4a', {pos: RADIO, gain: 1.7, wet: .4}); setObj('Restart the generator (Generator Room). Press F for your flashlight.'); entLevel(3);
   bg(async () => { await until(() => roomId() === 'cor'); await sleep(1500); walkerStart(new V3(P.x + 6, .2, 0)); walkerOrbit(4); S.walker.gainT = 1.6; await sleep(9000); walkerStop(); });
   bg(async () => { await until(() => roomId() === 'cor' && P.x > 9); bones(new V3(12, 1, 5), 12); await sleep(5000); ghostShow('Zombie_Basic', 24, 0, 4, 0); });
   await until(() => roomId() === 'gen'); setObj('Hold E at the generator to restart it.');
@@ -899,7 +904,7 @@ async function n4() {
   bg(async () => { while (!gi.used) { knock(new V3(P.x - 5, 1.2, P.z + 1), 2, 500, .9); await sleep(4500); } });
   await until(() => gi.used);
   S.flick = 3; setPower(1); await sleep(500); noiseBurst(.6, 70, 1.2, .5); setObj('Return to the Control Room.');
-  await until(() => roomId() === 'ops'); setObj(''); S.freeze = false; await sleep(2500);
+  await until(() => roomId() === 'ops'); entLevel(0); setObj(''); S.freeze = false; await sleep(2500);
   setPower(.35); S.flick = 2;
   knock(WESTDOOR, 3, 500, 2.0); await sleep(2200); await say('4b', {pos: WESTDOOR, gain: 2.2, wet: .3}); S.flick = 1;
   await say('4c', {pos: RADIO, gain: 1.7, wet: .3}); knock(WESTDOOR, 5, 260, 2.6); DOORS.find(d => d.name === 'west').shake = 1.2; await sleep(1800);
@@ -909,12 +914,12 @@ async function n4() {
 
 /* ================= NIGHT 5: The Listener ================= */
 async function n5() {
-  moveWheel(3); setPower(.7); setObj('Reach the surface access at the end of the corridor.');
+  moveWheel(3); setPower(.7); entLevel(3); setObj('Reach the surface access at the end of the corridor.');
   const hb = voice('heartbeat', {loop: true, gain: .2}); const dr = voice('infrasound', {loop: true, gain: .5});
   bg(async () => { while (S.night === 5 && !S.abort) { const k = Math.max(0, Math.min(1, (P.x - 3) / 22)); if (!S.flick) setPower(.75 - k * .55 + (roomId() === 'stair' ? .15 : 0)); fadeG(hb, .2 + k * .9, .4); await sleep(250); } });
   bg(async () => { await until(() => roomId() === 'cor'); await sleep(2500); ghostShow('Characters_Lis', 25, 0, 4, 0); await sleep(5000); walkerStart(new V3(P.x + 7, .2, 0)); walkerOrbit(3.5); S.walker.gainT = 1.6; await sleep(8000); walkerStop(); });
   bg(async () => { await until(() => P.x > 13); S.flick = 2; knock(new V3(P.x + 4, 1.2, 0), 3, 400, 1.0); });
-  await until(() => roomId() === 'stair'); walkerStop(); ghostHide(true); S.flick = 0; setPower(.45);
+  await until(() => roomId() === 'stair'); entLevel(0); walkerStop(); ghostHide(true); S.flick = 0; setPower(.45);
   await sleep(2500); setObj('The payphone is ringing.'); await ringAnswer(PAYPHONE, 'Answer the payphone'); setObj('');
   await sleep(600); await say('5a', {gain: 1.1}); await sleep(900);
   await say('5b', {pos: PAYPHONE, gain: 2.2, wet: .3}); await sleep(500); await say('5c', {pos: PAYPHONE, gain: 2.2, wet: .3}); await sleep(600); S.flick = 1.5;
@@ -935,13 +940,147 @@ async function n5() {
 
 /* ---- per-frame story hooks ---- */
 function storyTick(dt, T) {
-  S.flick > 0 && (S.flick = Math.max(0, S.flick - dt));
+  S.flick > 0 && (S.flick = Math.max(0, S.flick - dt)); if (S.showObj > 0) { S.showObj -= dt; if (S.showObj <= 0) objApply(); }
   S.power = S.flick > 0 ? (hash(Math.floor(T * 17)) > .5 ? S.base : S.base * .04) : S.base;
   walkerTick(dt); ghostTick(dt);
-  curInt = started ? findInt() : null;
+  curInt = started && !P.hidden ? findInt() : null;
   const hd = $('hold');
   if (curInt && curInt.hold && keys.KeyE) { holdT += dt; hd.style.display = 'block'; hd.firstElementChild.style.width = Math.min(100, holdT / curInt.hold * 100) + '%'; if (holdT >= curInt.hold) useInt(curInt); }
   else { holdT = Math.max(0, holdT - dt * 2); hd.style.display = 'none'; }
+}
+
+/* ================= ENTITY: the Listener (hears you, hunts you) ================= */
+const COORD = {o4: [.9, -1.6], o3: [-1.8, -1.2], o2: [0, .8], o1: [2.4, 0], c1: [4.6, 0], c2: [8, 0], c3: [11, 0], c3s: [12, 0], c4: [15, 0], c5: [18.5, 0], c6: [21.5, 0], c6s: [22, 0], c7: [25, 0],
+  g1: [11, -4], g2: [8.9, -7.3], g3: [13.5, -7.5], m1: [21.5, -4], m2: [20.2, -4.6], m3: [23.4, -6], s1: [12, 4], s2: [10, 7], s3: [15.2, 4.4], d1: [22, 4], d2: [20.6, 4.4], d3: [23.5, 6.5], st1: [28.5, 0], st2: [30, -1.5]};
+const EDG = [['o4', 'o2'], ['o3', 'o2'], ['o2', 'o1'], ['o1', 'c1', 'ops-east'], ['c1', 'c2'], ['c2', 'c3'], ['c3', 'c3s'], ['c3', 'c4'], ['c4', 'c5'], ['c5', 'c6'], ['c6', 'c6s'], ['c6', 'c7'],
+  ['c3', 'g1', 'gen'], ['g1', 'g2'], ['g1', 'g3'], ['c6', 'm1', 'med'], ['m1', 'm2'], ['m1', 'm3'], ['c3s', 's1', 'storage'], ['s1', 's2'], ['s1', 's3'], ['c6s', 'd1', 'dorm'], ['d1', 'd2'], ['d1', 'd3'], ['c7', 'st1', 'stair'], ['st1', 'st2']];
+const ADJ = {}; for (const k in COORD) ADJ[k] = [];
+for (const [a, b, d] of EDG) { ADJ[a].push({to: b, door: d}); ADJ[b].push({to: a, door: d}); }
+const doorByName = n => DOORS.find(d => d.name === n);
+function nodeNear(x, z) { let b = null, bd = 1e9; for (const id in COORD) { const d = Math.hypot(COORD[id][0] - x, COORD[id][1] - z); if (d < bd) { bd = d; b = id; } } return b; }
+function pathFind(a, b) {
+  const dist = {}, prev = {}, Qs = new Set(Object.keys(COORD)); for (const k of Qs) dist[k] = 1e9; dist[a] = 0;
+  while (Qs.size) {
+    let u = null; for (const k of Qs) if (u === null || dist[k] < dist[u]) u = k; if (dist[u] >= 1e9) break; Qs.delete(u); if (u === b) break;
+    for (const e of ADJ[u]) { if (e.door && doorByName(e.door).locked) continue; const w = dist[u] + Math.hypot(COORD[u][0] - COORD[e.to][0], COORD[u][1] - COORD[e.to][1]); if (w < dist[e.to]) { dist[e.to] = w; prev[e.to] = u; } }
+  }
+  if (dist[b] >= 1e9) return null; const ids = [b]; while (ids[0] !== a) ids.unshift(prev[ids[0]]); return {ids, len: dist[b]};
+}
+function roomIdAt(x, z) { for (const r of ROOMS) if (x > r.x0 && x < r.x1 && z > r.z0 && z < r.z1) return r.id; return ''; }
+
+const ENT = {on: false, level: 0, state: 'idle', pos: new V3(), node: 'st2', path: [], timer: 0, sight: 0, lost: 0, mesh: null, mixer: null, acts: {}, snd: null, wait: 0, hearT: 0, sniffT: 0, face: 0, exposed: 0, cur: ''};
+const LV = [null, {hear: 10, patrol: 1.0, chase: 2.0, sniff: 70}, {hear: 16, patrol: 1.2, chase: 2.5, sniff: 45}, {hear: 24, patrol: 1.4, chase: 2.9, sniff: 25}];
+const HIDES = [
+  {id: 'desk', label: 'Hide under the desk', pos: [0, -1.5], hp: [0, -2.0], ex: [-1.0, -1.1], yaw: Math.PI, node: 'o4'},
+  {id: 'dorm', label: 'Hide under the bed', pos: [21.0, 3.6], hp: [19.9, 3.6], ex: [21.3, 3.6], yaw: -Math.PI / 2, node: 'd2'},
+  {id: 'med', label: 'Hide under the bed', pos: [20.2, -4.2], hp: [19.3, -4.2], ex: [20.6, -4.3], yaw: -Math.PI / 2, node: 'm2'},
+  {id: 'sto', label: 'Hide behind the crates', pos: [15.2, 3.9], hp: [16.4, 3.9], ex: [14.8, 3.9], yaw: Math.PI / 2, node: 's3'},
+  {id: 'gen', label: 'Hide behind the barrels', pos: [9.4, -7.0], hp: [7.6, -8.2], ex: [9.4, -6.9], yaw: -Math.PI / 2, node: 'g2'}];
+function setupHides() { for (const h of HIDES) addInt({pos: new V3(h.pos[0], 1, h.pos[1]), r: 1.5, label: h.label, repeat: true, onUse: () => enterHide(h)}); }
+function enterHide(h) { P.hidden = h; P.x = h.hp[0]; P.z = h.hp[1]; P.yaw = h.yaw; P.pitch = -.1; P.vx = P.vz = 0; P.spike = 0; note('Hold <b>SPACE</b> to hold your breath. Press <b>E</b> to come out.', 3500); }
+function leaveHide() { if (!P.hidden) return; const h = P.hidden; P.hidden = null; P.x = h.ex[0]; P.z = h.ex[1]; }
+const BAT_SPOTS = [['ops', 2.9, -1.0], ['cor', 9.5, .95], ['gen', 8.9, -8.0], ['sto', 16, 7.6], ['med', 23.8, -6.6], ['dorm', 24.2, 6.5], ['stair', 29, 1.9]];
+function placeBatteries(n) {
+  for (let i = 0; i < 3; i++) {
+    const s = BAT_SPOTS[(n * 3 + i * 2) % BAT_SPOTS.length];
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(.017, .017, .07, 10), new THREE.MeshStandardMaterial({color: 0x2a6a2a, emissive: 0x1a4a1a, roughness: .5, metalness: .6}));
+    m.rotation.z = Math.PI / 2; m.position.set(s[1], .02, s[2]); (GROUPS[s[0]] || scene).add(m); tapesGroup.push(m);
+    addInt({pos: new V3(s[1], .3, s[2]), r: 1.5, label: 'Take the battery', onUse: () => { m.visible = false; P.bat = Math.min(1, P.bat + .6); P.spike = Math.max(P.spike, .3); toast('Flashlight battery restored'); }});
+  }
+}
+function entReset() { entDespawn(); ENT.level = 0; P.hidden = null; P.bat = 1; P.spike = 0; P.stam = 1; S.caught = false; }
+function entLevel(l) { ENT.level = l; if (l === 0) entDespawn(); else if (!ENT.on) entSpawn(); }
+function entSpawn() {
+  const pn = nodeNear(P.x, P.z); let best = null, bl = -1;
+  for (const id in COORD) { const p = pathFind(pn, id); if (p && p.len > bl && p.len > 14) { bl = p.len; best = id; } }
+  if (!best) return; ENT.node = best; ENT.pos.set(COORD[best][0], 0, COORD[best][1]); ENT.on = true; ENT.state = 'patrol'; ENT.path = []; ENT.timer = 0; ENT.sight = 0; ENT.sniffT = 0; ENT.lost = 0;
+  const g = GH.Zombie_Basic; if (g) {
+    const obj = SU.clone(g.scene); obj.traverse(m => { if (m.isMesh) { m.material = ghostMat; m.castShadow = false; m.frustumCulled = false; } });
+    const bb = new THREE.Box3().setFromObject(obj), s = 1.95 / Math.max(.1, bb.max.y - bb.min.y), wrap = new THREE.Group(); wrap.add(obj); obj.position.y = -bb.min.y; wrap.scale.set(s * .8, s * 1.1, s * .8);
+    ENT.mixer = new THREE.AnimationMixer(obj); ENT.acts = {}; for (const c of g.animations) ENT.acts[c.name] = ENT.mixer.clipAction(c); ENT.cur = ''; scene.add(wrap); ENT.mesh = wrap;
+  }
+  ENT.snd = {steps: voice('footsteps', {pos: ENT.pos, loop: true, gain: 0, ref: 1.2, roll: 1.2}), rasp: voice('breath', {pos: ENT.pos, loop: true, gain: 0, ref: 1.5}), heart: voice('heartbeat', {loop: true, gain: 0})};
+}
+function entDespawn() {
+  if (ENT.snd) { for (const k in ENT.snd) ENT.snd[k].stop(); ENT.snd = null; } if (ENT.mesh) { scene.remove(ENT.mesh); ENT.mesh = null; } ENT.on = false; ENT.state = 'idle'; ENT.path = [];
+  if (S.drone) fadeG(S.drone, .38, .5);
+}
+function entSetPath(node, state, speedK = 1) { const p = pathFind(ENT.node, node); ENT.path = p ? p.ids.slice(1) : []; ENT.state = state; ENT.speedK = speedK; ENT.target = node; }
+function playerNoise() { if (P.hidden) return P.held ? .03 : .2; const sp = Math.hypot(P.vx, P.vz); const n = sp < .3 ? .06 : P.crouch ? .15 : sp > 2.6 ? 1 : .42; return Math.min(1.2, n + P.spike); }
+function canSee(ed) {
+  if (P.hidden) return false; const inCor = (x, z) => x > 3.5 && x < 26 && Math.abs(z) < 1.3;
+  if (inCor(ENT.pos.x, ENT.pos.z) && inCor(P.x, P.z)) return ed < (flashOn ? 18 : 7);
+  const a = roomIdAt(ENT.pos.x, ENT.pos.z); return a && a === roomIdAt(P.x, P.z) && ed < (flashOn ? 12 : 6);
+}
+function entMove(dt, speed) {
+  if (!ENT.path.length) return true; const nxt = ENT.path[0], tgt = COORD[nxt], e = ADJ[ENT.node].find(e => e.to === nxt);
+  if (e && e.door) {
+    const d = doorByName(e.door); if (d.locked) { ENT.path = []; return true; }
+    if (d.open < .6) { ENT.wait += dt; if (ENT.wait > 1.1 && d.target === 0) { d.target = 1; const p = mkPan(new V3(d.x, 1.2, d.z), 1.5, 1); noiseBurst(.9, 520, .5, 6, p); } if (d.open < .6) return false; }
+  }
+  ENT.wait = 0; const dx = tgt[0] - ENT.pos.x, dz = tgt[1] - ENT.pos.z, dist = Math.hypot(dx, dz);
+  if (dist < .15) { ENT.node = nxt; ENT.path.shift(); return !ENT.path.length; }
+  ENT.pos.x += dx / dist * speed * dt; ENT.pos.z += dz / dist * speed * dt; ENT.face = Math.atan2(dx, dz); return false;
+}
+async function caught() {
+  if (S.caught) return; S.caught = true; S.freeze = true; ENT.state = 'kill';
+  const dx = ENT.pos.x - P.x, dz = ENT.pos.z - P.z; P.yaw = Math.atan2(-dx, -dz);
+  noiseBurst(1.0, 90, 3, .6); noiseBurst(.6, 2500, 1.6, 4); beep(55, .8, .8); master.gain.setTargetAtTime(.12, AC.currentTime, .05);
+  await wait(450); const f = $('fade'); f.style.transition = 'opacity .25s'; f.style.opacity = 1; await wait(1200);
+  leaveHide(); P.hidden = null; P.x = 0; P.z = 1.2; P.yaw = 0; P.pitch = -.04; P.vx = P.vz = 0; const lvl = ENT.level; entDespawn(); S.flick = 0; master.gain.value = .9;
+  await wait(900); f.style.transition = 'opacity 1.6s'; f.style.opacity = 0; S.freeze = false; S.caught = false;
+  if (lvl) setTimeout(() => { if (ENT.level && !ENT.on && !S.abort) entSpawn(); }, 10000);
+}
+function entTick(dt, T) {
+  P.spike = Math.max(0, P.spike - dt * 1.6);
+  if (flashOn) { P.bat = Math.max(0, P.bat - dt / 210); if (P.bat <= 0) { flashOn = false; flash.visible = false; toast('The flashlight died'); } }
+  const bat = $('bat'); bat.style.display = (flashOn || P.bat < .99) ? 'block' : 'none'; bat.firstElementChild.style.width = P.bat * 100 + '%';
+  const br = $('breath');
+  if (P.hidden) { if (keys.Space && P.stam > 0) { P.stam = Math.max(0, P.stam - dt / 6); P.held = true; } else { P.held = false; P.stam = Math.min(1, P.stam + dt / 12); } br.style.display = 'block'; br.firstElementChild.style.width = P.stam * 100 + '%'; }
+  else { P.held = false; br.style.display = 'none'; }
+  flash.intensity = (flashOn && P.bat < .2) ? 80 * (hash(Math.floor(T * 13)) > .5 ? 1 : .25) : 80;
+  if (!ENT.on || S.freeze || S.caught) return;
+  const L = LV[ENT.level], ed = Math.hypot(ENT.pos.x - P.x, ENT.pos.z - P.z), pn = nodeNear(P.x, P.z);
+  // senses
+  ENT.hearT -= dt;
+  if (ENT.hearT <= 0) {
+    ENT.hearT = .35; const p = pathFind(ENT.node, pn);
+    if (p && ENT.state !== 'chase' && ENT.state !== 'check' && p.len < playerNoise() * L.hear) entSetPath(pn, 'investigate', 1.5);
+    if (canSee(ed)) ENT.sight += .35; else ENT.sight = Math.max(0, ENT.sight - .5);
+    if (ENT.sight > (flashOn ? .35 : .8) && ENT.state !== 'chase' && ENT.state !== 'check') { ENT.state = 'chase'; ENT.lost = 0; noiseBurst(.5, 1500, .6, 3); if (S.drone) fadeG(S.drone, 0, .05); setTimeout(() => S.drone && fadeG(S.drone, .38, 2), 2500); }
+    if (ENT.state === 'chase') { ENT.path = (pathFind(ENT.node, pn) || {ids: [ENT.node]}).ids.slice(1); if (canSee(ed)) ENT.lost = 0; else ENT.lost += .35; if (ENT.lost > 5) { ENT.state = 'search'; ENT.timer = 12; } }
+  }
+  ENT.sniffT += dt; if (ENT.sniffT > L.sniff && ENT.state === 'patrol') { ENT.sniffT = 0; entSetPath(pn, 'investigate', 1.2); }
+  // behaviour
+  let speed = L.patrol, moving = false;
+  if (ENT.state === 'patrol') {
+    if (!ENT.path.length) { const ids = Object.keys(COORD).filter(k => k !== ENT.node); entSetPath(ids[Math.floor(Math.random() * ids.length)], 'patrol'); }
+    moving = !entMove(dt, speed) || ENT.path.length > 0;
+  } else if (ENT.state === 'investigate') { speed = L.patrol * 1.5; moving = true; if (entMove(dt, speed)) { ENT.state = 'search'; ENT.timer = 9 + Math.random() * 4; } }
+  else if (ENT.state === 'search') {
+    ENT.timer -= dt; speed = L.patrol * 1.1; moving = ENT.path.length > 0;
+    if (!ENT.path.length) { const hs = HIDES.filter(h => h.node !== ENT.node && Math.hypot(COORD[h.node][0] - ENT.pos.x, COORD[h.node][1] - ENT.pos.z) < 14); const nb = ADJ[ENT.node]; const pick = (hs.length && Math.random() < .5) ? hs[Math.floor(Math.random() * hs.length)].node : nb[Math.floor(Math.random() * nb.length)].to; entSetPath(pick, 'search'); ENT.state = 'search'; }
+    else entMove(dt, speed);
+    if (ENT.timer <= 0) { ENT.state = 'patrol'; ENT.path = []; }
+  } else if (ENT.state === 'chase') { speed = L.chase; moving = true; entMove(dt, speed); }
+  else if (ENT.state === 'check') { moving = false; ENT.timer -= dt; if (P.hidden && !P.held) ENT.exposed += dt; if (ENT.exposed > .9) { caught(); return; } if (ENT.timer <= 0) { ENT.state = 'search'; ENT.timer = 8; ENT.path = []; } }
+  // checking hiding spots
+  if ((ENT.state === 'search' || ENT.state === 'patrol' || ENT.state === 'investigate') && P.hidden && ENT.node === P.hidden.node && Math.hypot(ENT.pos.x - COORD[ENT.node][0], ENT.pos.z - COORD[ENT.node][1]) < .3) { ENT.state = 'check'; ENT.timer = 3.4; ENT.exposed = 0; ENT.path = []; }
+  // catch
+  if (!P.hidden && ed < 1.05 && ENT.state !== 'kill') { caught(); return; }
+  // presentation
+  if (ENT.mesh) {
+    ENT.mesh.position.set(ENT.pos.x, 0, ENT.pos.z); ENT.mesh.rotation.y = ENT.face; ENT.mesh.visible = ed < 24;
+    const want = ENT.state === 'chase' ? 'Run' : (moving ? 'Walk' : 'Idle'); if (want !== ENT.cur && ENT.acts[want]) { const a = ENT.acts[want]; a.reset().play(); if (ENT.acts[ENT.cur]) ENT.acts[ENT.cur].crossFadeTo(a, .3, false); ENT.cur = want; } ENT.mixer.update(dt);
+  }
+  const sn = ENT.snd; if (sn) {
+    setPan(sn.steps.pan, ENT.pos); setPan(sn.rasp.pan, new V3(ENT.pos.x, 1.5, ENT.pos.z));
+    sn.steps.g.gain.value += (((moving && ed < 40) ? (ENT.state === 'chase' ? 2.6 : 1.7) : 0) - sn.steps.g.gain.value) * Math.min(1, dt * 6); sn.steps.s.playbackRate.value = ENT.state === 'chase' ? 1.3 : .85;
+    sn.rasp.g.gain.value = Math.max(0, (12 - ed) / 12) * 2.4; sn.heart.g.gain.value = Math.max(0, (14 - ed) / 14) * (ENT.state === 'chase' ? 1.3 : .8);
+    if (ed < 7 && flashOn) flash.intensity = 80 * (hash(Math.floor(T * 16)) > .5 ? 1 : .15);
+    if (ed < 5 && Math.random() < dt * .7) S.flick = .45;
+    $('grain').style.opacity = .07 + Math.max(0, (10 - ed) / 10) * .3;
+  }
 }
 
 /* ================= boot ================= */
@@ -975,13 +1114,15 @@ async function warmup() {
 function buildMenu() {
   const m = $('menu'), unlocked = saved(); m.innerHTML = '';
   const mk = (txt, fn, dis) => { const b = document.createElement('button'); b.textContent = txt; b.disabled = !!dis; b.onclick = fn; m.appendChild(b); return b; };
+  try { S.subs = localStorage.getItem('ls_subs') === '1'; } catch (e) { S.subs = false; }
+  const sb = mk('Subtitles: ' + (S.subs ? 'On' : 'Off'), () => { S.subs = !S.subs; try { localStorage.setItem('ls_subs', S.subs ? '1' : '0'); } catch (e) {} sb.textContent = 'Subtitles: ' + (S.subs ? 'On' : 'Off'); });
   mk('New game', () => begin(1)); if (unlocked > 1) mk('Continue: Night ' + unlocked, () => begin(unlocked));
   const row = document.createElement('div'); row.className = 'nights'; m.appendChild(row);
   for (let i = 1; i <= 5; i++) { const b = document.createElement('button'); b.textContent = 'Night ' + i; b.disabled = i > unlocked; b.onclick = () => begin(i); row.appendChild(b); }
 }
 async function begin(n) {
   await AC.resume(); $('load').style.display = 'none'; started = true;
-  voice('infrasound', {loop: true, gain: .38, keep: true}); voice('static', {loop: true, gain: .025, keep: true});
+  S.drone = voice('infrasound', {loop: true, gain: .38, keep: true}); setTimeout(() => { $('hud').style.transition = 'opacity 2s'; $('hud').style.opacity = 0; }, 18000); voice('static', {loop: true, gain: .025, keep: true});
   if (!isTouch && cv.requestPointerLock) cv.requestPointerLock();
   startNight(n);
 }
@@ -1016,4 +1157,4 @@ window.__tp = (x, z, yawDeg, pitchDeg = 0) => { P.x = x; P.z = z; P.yaw = yawDeg
 window.__flash = v => { flashOn = v; flash.visible = v; };
 window.__door = (n, v) => { const d = DOORS.find(d => d.name === n); if (d) { d.target = v; d.open = v; } };
 window.__info = () => renderer.info.render;
-window.__G = {INT, keys, useInt, roomId, DOORS}; window.__begin = begin; window.__S = S; window.__P = P; window.__next = () => { S.abort = false; };
+window.__G = {INT, keys, useInt, roomId, DOORS}; window.__begin = begin; window.__ENT = ENT; window.__HIDES = HIDES; window.__enterHide = enterHide; window.__S = S; window.__P = P; window.__next = () => { S.abort = false; };
